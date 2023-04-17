@@ -39,6 +39,7 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim3;
 TIM_HandleTypeDef htim5;
 
@@ -62,6 +63,14 @@ QEIStructureTypedef QEIData = {0};
 
 uint64_t _micros = 0;
 
+uint32_t MotorSetduty = 200; //
+
+// SET PID
+arm_pid_instance_f32 PID = {0};
+float position = 0 ;
+float setposition = 0;
+float Vfeedback = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -70,10 +79,13 @@ static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM5_Init(void);
+static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
 
 inline uint64_t micros();
 void QEIEncoderPositionVelocity_Update();
+
+float PlantSimulation(float VIn);
 
 /* USER CODE END PFP */
 
@@ -113,9 +125,21 @@ int main(void)
   MX_USART2_UART_Init();
   MX_TIM3_Init();
   MX_TIM5_Init();
+  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
 
 HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_1|TIM_CHANNEL_2);
+
+HAL_TIM_Base_Start(&htim1);
+
+HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+
+// SET PID
+PID.Kp = 0.1;
+PID.Ki = 0.00001;
+PID.Kd = 0.1;
+arm_pid_init_f32(&PID, 0);
 
   /* USER CODE END 2 */
 
@@ -135,7 +159,24 @@ HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_1|TIM_CHANNEL_2);
 		  timestamp = HAL_GetTick() + 1000;
 		  QEIReadRaw = __HAL_TIM_GET_COUNTER(&htim3);
 		  degree = (QEIReadRaw * 360) / 3072.0;
+
+		  if (MotorSetduty >= 200) // หมุนขวา
+		  {
+			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, MotorSetduty); //PA8 หมุนขวา
+			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); //PA9 หมุนซ้าย
+		  }
+
+		  else if (MotorSetduty < 200) // หมุนซ้าย
+		  {
+			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); //PA8 หมุนขวา
+			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, MotorSetduty); //PA9 หมุนซ้าย
+		  }
+
+		  Vfeedback = arm_pid_f32(&PID, setposition - position) ;
+		  position = PlantSimulation(Vfeedback);
+
 	  }
+
 
   }
   /* USER CODE END 3 */
@@ -185,6 +226,85 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief TIM1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM1_Init(void)
+{
+
+  /* USER CODE BEGIN TIM1_Init 0 */
+
+  /* USER CODE END TIM1_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
+
+  /* USER CODE BEGIN TIM1_Init 1 */
+
+  /* USER CODE END TIM1_Init 1 */
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 83;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 99;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 100;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
+  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
+  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
+  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
+  sBreakDeadTimeConfig.DeadTime = 0;
+  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
+  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
+  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
+  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM1_Init 2 */
+
+  /* USER CODE END TIM1_Init 2 */
+  HAL_TIM_MspPostInit(&htim1);
+
 }
 
 /**
@@ -386,6 +506,18 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 		QEIData.data[1] = QEIData.data[0];
 		QEIData.timestamp[1] = QEIData.timestamp[0];
 
+	}
+
+	float PlantSimulation(float VIn) // run with fix frequency
+	{
+		static float speed = 0;
+		static float position = 0;
+		float current = VIn - speed * 0.0123;
+		float torque = current * 0.456;
+		float acc = torque * 0.789;
+		speed += acc;
+		position += speed;
+		return position;
 	}
 
 /* USER CODE END 4 */
