@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "arm_math.h"
+#include "math.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -40,7 +40,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 TIM_HandleTypeDef htim1;
-TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim5;
 
 UART_HandleTypeDef huart2;
@@ -49,6 +49,8 @@ UART_HandleTypeDef huart2;
 
 uint32_t QEIReadRaw;
 float degree = 0;
+
+float PastTime = 0;
 
 typedef struct _QEIStructure
 {
@@ -63,29 +65,34 @@ QEIStructureTypedef QEIData = {0};
 
 uint64_t _micros = 0;
 
-uint32_t MotorSetduty = 200; //
+int8_t Direction = 1;
 
 // SET PID
-arm_pid_instance_f32 PID = {0};
-float position = 0 ;
-float setposition = 0;
-float Vfeedback = 0;
+float K_p = 1;
+float K_i = 0;
+float K_d = 0;
 
+// SET target
+int32_t setpoint = 0;
+
+int32_t e_past;
+int32_t e;
+float u = 0;
+float PWM = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
-static void MX_TIM3_Init(void);
 static void MX_TIM5_Init(void);
 static void MX_TIM1_Init(void);
+static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
 
 inline uint64_t micros();
 void QEIEncoderPositionVelocity_Update();
 
-float PlantSimulation(float VIn);
 
 /* USER CODE END PFP */
 
@@ -123,23 +130,19 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
-  MX_TIM3_Init();
   MX_TIM5_Init();
   MX_TIM1_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
 
-HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_1|TIM_CHANNEL_2);
+HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_1|TIM_CHANNEL_2);
 
 HAL_TIM_Base_Start(&htim1);
 
 HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
 HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
 
-// SET PID
-PID.Kp = 0.1;
-PID.Ki = 0.00001;
-PID.Kd = 0.1;
-arm_pid_init_f32(&PID, 0);
+
 
   /* USER CODE END 2 */
 
@@ -153,30 +156,60 @@ arm_pid_init_f32(&PID, 0);
 
 
 	  static uint64_t timestamp = 0;
-	  //int64_t currentTime = micros();
-	  if (HAL_GetTick() > timestamp) // 10 Hz
+
+	  if (HAL_GetTick() > timestamp) // 100 Hz
 	  {
-		  timestamp = HAL_GetTick() + 1000;
-		  QEIReadRaw = __HAL_TIM_GET_COUNTER(&htim3);
+		  timestamp = HAL_GetTick() + 10;
+		  QEIReadRaw = __HAL_TIM_GET_COUNTER(&htim2);
 		  degree = (QEIReadRaw * 360) / 3072.0;
 
-		  if (MotorSetduty >= 200) // หมุนขวา
+//		  float CurrentTime = micros(); // เวลา�?ั�?ุ�?ั�?
+//		  float Delta_T = ( CurrentTime - PastTime ) / 1.0e6 ;  // PastTime = previous time
+//		  PastTime = CurrentTime;
+		  float Delta_T = 0.01;
+
+		  // e(t), Error
+		  e = setpoint - degree ;
+
+		  // derivative
+		  float de_By_dt = (e - e_past) / Delta_T ;
+
+		  // integral
+		  float e_integral = e_integral + (e * Delta_T);
+
+		  // control signal
+		  u = (K_p * e) + (K_i * e_integral) + (K_d * de_By_dt) ;
+
+		  // PWM
+		  PWM = fabs(u);
+		  if (PWM > 100)
 		  {
-			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, MotorSetduty); //PA8 หมุนขวา
-			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); //PA9 หมุนซ้าย
+			  PWM = 100;
 		  }
 
-		  else if (MotorSetduty < 200) // หมุนซ้าย
+		  // Motor Direction
+		  Direction = 1;
+		  if (u < 0)
 		  {
-			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); //PA8 หมุนขวา
-			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, MotorSetduty); //PA9 หมุนซ้าย
+			  Direction = -1;
 		  }
 
-		  Vfeedback = arm_pid_f32(&PID, setposition - position) ;
-		  position = PlantSimulation(Vfeedback);
+		  if (Direction == 1) // หมุ�?�?วา
+		  {
+			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, PWM); //PA8 หมุ�?�?วา
+			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); //PA9 หมุ�?�?�?าย
+		  }
+
+		  else if (Direction == -1) // หมุ�?�?�?าย
+		  {
+			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); //PA8 หมุ�?�?วา
+			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, PWM); //PA9 หมุ�?�?�?าย
+		  }
+
+
 
 	  }
-
+	  e_past = e;
 
   }
   /* USER CODE END 3 */
@@ -308,29 +341,29 @@ static void MX_TIM1_Init(void)
 }
 
 /**
-  * @brief TIM3 Initialization Function
+  * @brief TIM2 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_TIM3_Init(void)
+static void MX_TIM2_Init(void)
 {
 
-  /* USER CODE BEGIN TIM3_Init 0 */
+  /* USER CODE BEGIN TIM2_Init 0 */
 
-  /* USER CODE END TIM3_Init 0 */
+  /* USER CODE END TIM2_Init 0 */
 
   TIM_Encoder_InitTypeDef sConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
 
-  /* USER CODE BEGIN TIM3_Init 1 */
+  /* USER CODE BEGIN TIM2_Init 1 */
 
-  /* USER CODE END TIM3_Init 1 */
-  htim3.Instance = TIM3;
-  htim3.Init.Prescaler = 0;
-  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim3.Init.Period = 3071;
-  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = 0;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 3071;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
   sConfig.IC1Polarity = TIM_ICPOLARITY_RISING;
   sConfig.IC1Selection = TIM_ICSELECTION_DIRECTTI;
@@ -340,19 +373,19 @@ static void MX_TIM3_Init(void)
   sConfig.IC2Selection = TIM_ICSELECTION_DIRECTTI;
   sConfig.IC2Prescaler = TIM_ICPSC_DIV1;
   sConfig.IC2Filter = 0;
-  if (HAL_TIM_Encoder_Init(&htim3, &sConfig) != HAL_OK)
+  if (HAL_TIM_Encoder_Init(&htim2, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN TIM3_Init 2 */
+  /* USER CODE BEGIN TIM2_Init 2 */
 
-  /* USER CODE END TIM3_Init 2 */
+  /* USER CODE END TIM2_Init 2 */
 
 }
 
@@ -487,7 +520,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 	{
 		// collect data
 		QEIData.timestamp[0] = micros();
-		uint32_t counterPosition = __HAL_TIM_GET_COUNTER(&htim3);
+		uint32_t counterPosition = __HAL_TIM_GET_COUNTER(&htim2);
 		QEIData.data[0] = counterPosition;
 
 		// calculation
@@ -508,17 +541,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 	}
 
-	float PlantSimulation(float VIn) // run with fix frequency
-	{
-		static float speed = 0;
-		static float position = 0;
-		float current = VIn - speed * 0.0123;
-		float torque = current * 0.456;
-		float acc = torque * 0.789;
-		speed += acc;
-		position += speed;
-		return position;
-	}
 
 /* USER CODE END 4 */
 
