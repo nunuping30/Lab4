@@ -50,21 +50,6 @@ UART_HandleTypeDef huart2;
 uint32_t QEIReadRaw;
 float degree = 0;
 
-float PastTime = 0;
-
-typedef struct _QEIStructure
-{
-	uint32_t data[2]; //Position data contenter
-	uint64_t timestamp[2];
-
-	float QEIPosition ; // step
-	float QEIVelocity ; // step/sec
-
-}QEIStructureTypedef;
-QEIStructureTypedef QEIData = {0};
-
-uint64_t _micros = 0;
-
 int8_t Direction = 1;
 
 // SET PID
@@ -89,9 +74,6 @@ static void MX_TIM5_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
-
-inline uint64_t micros();
-void QEIEncoderPositionVelocity_Update();
 
 
 /* USER CODE END PFP */
@@ -161,9 +143,9 @@ HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
 	  {
 		  timestamp = HAL_GetTick() + 10;
 		  QEIReadRaw = __HAL_TIM_GET_COUNTER(&htim2);
-		  degree = (QEIReadRaw * 360) / 3072.0;
+		  degree = (QEIReadRaw * 36000) / 307200.0;
 
-//		  float CurrentTime = micros(); // เวลา�?ั�?ุ�?ั�?
+//		  float CurrentTime = micros();
 //		  float Delta_T = ( CurrentTime - PastTime ) / 1.0e6 ;  // PastTime = previous time
 //		  PastTime = CurrentTime;
 		  float Delta_T = 0.01;
@@ -194,16 +176,16 @@ HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
 			  Direction = -1;
 		  }
 
-		  if (Direction == 1) // หมุ�?�?วา
+		  if (Direction == -1)
 		  {
-			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, PWM); //PA8 หมุ�?�?วา
-			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); //PA9 หมุ�?�?�?าย
+			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, PWM); //PA8
+			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, 0); //PA9
 		  }
 
-		  else if (Direction == -1) // หมุ�?�?�?าย
+		  else if (Direction == 1)
 		  {
-			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); //PA8 หมุ�?�?วา
-			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, PWM); //PA9 หมุ�?�?�?าย
+			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0); //PA8
+			  __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_2, PWM); //PA9
 		  }
 
 
@@ -308,7 +290,7 @@ static void MX_TIM1_Init(void)
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 100;
+  sConfigOC.Pulse = 0;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
@@ -361,7 +343,7 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 0;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 3071;
+  htim2.Init.Period = 307199;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   sConfig.EncoderMode = TIM_ENCODERMODE_TI12;
@@ -501,46 +483,6 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
-void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
-	{
-		if(htim == &htim5)
-		{
-			_micros += UINT32_MAX;
-		}
-	}
-
-	uint64_t micros()
-	{
-		return __HAL_TIM_GET_COUNTER(&htim5)+_micros;
-	}
-
-
-	void QEIEncoderPositionVelocity_Update()
-	{
-		// collect data
-		QEIData.timestamp[0] = micros();
-		uint32_t counterPosition = __HAL_TIM_GET_COUNTER(&htim2);
-		QEIData.data[0] = counterPosition;
-
-		// calculation
-		QEIData.QEIPosition = counterPosition % 3072;
-
-		int32_t diffPosition = QEIData.data[0] - QEIData.data[1];
-		float difftime = (QEIData.timestamp[0] - QEIData.timestamp[1]);
-
-		//handle wrap-around
-		if (diffPosition > 64512 >> 1) diffPosition -= 64512;
-		if (diffPosition < -(64512 >> 1)) diffPosition += 64512;
-
-		// calculate angular velocity in pulse per sec
-		QEIData.QEIVelocity = (diffPosition * 1000000) / difftime; // micro sec to sec ==> * 10^6
-
-		QEIData.data[1] = QEIData.data[0];
-		QEIData.timestamp[1] = QEIData.timestamp[0];
-
-	}
-
 
 /* USER CODE END 4 */
 
