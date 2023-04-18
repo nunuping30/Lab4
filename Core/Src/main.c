@@ -54,7 +54,7 @@ int8_t Direction = 1;
 
 // SET PID
 float K_p = 1;
-float K_i = 0;
+float K_i = 0.31;
 float K_d = 0;
 
 // SET target
